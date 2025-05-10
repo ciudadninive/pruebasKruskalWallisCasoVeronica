@@ -1,47 +1,67 @@
 import pandas as pd
-from scipy.stats import kruskal, chi2_contingency
+import numpy as np
+from scipy.stats import kruskal, chi2
+import warnings
 
-# Cargar datos
-archivo = "MuestrasAplicandoFiltradoInterIntraGrupo.xlsx"
-df_control = pd.read_excel(archivo, sheet_name="KRUSKALL-WALLIS-CE1")
-df_experimental = pd.read_excel(archivo, sheet_name="KRUSKALL-WALLIS-CE2")
+# Ignorar advertencias de pandas por celdas vacías o tipos mixtos
+warnings.filterwarnings("ignore", category=UserWarning, module="pandas")
 
-# Limpiar columnas y valores
-for df in [df_control, df_experimental]:
-    df.columns = [col.strip() for col in df.columns]
-    df['NivelLectura-Pretest'] = df['NivelLectura-Pretest'].astype(str).str.strip().str.capitalize()
+# Archivo y hojas a analizar
+archivo = "AplicandoFiltrado-InterGrupo.xlsx"
+hojas = [
+    "KRUSKAL-WALLIS-BAJO",
+    "KRUSKAL-WALLIS-MEDIO",
+    "KRUSKAL-WALLIS-ALTO"
+]
 
-# Niveles de lectura presentes en ambos grupos
-niveles = sorted(list(set(df_control['NivelLectura-Pretest'].unique()) | set(df_experimental['NivelLectura-Pretest'].unique())))
+# Función para limpiar y preparar los datos
+def limpiar_puntaje(df):
+    # Eliminar filas con valores no numéricos en Puntaje_Postest
+    df = df.copy()
+    df["Puntaje_Postest"] = pd.to_numeric(df["Puntaje_Postest"], errors="coerce")
+    df = df.dropna(subset=["Puntaje_Postest"])
+    return df
 
-# Valor crítico chi-cuadrado para gl=1, alfa=0.05
-valor_critico = 3.841
+# Función para ejecutar la prueba Kruskal-Wallis
+def prueba_kruskal(df):
+    # Agrupar por grupo experimental (Condicion_Experimental)
+    grupos = []
+    nombres_grupos = []
+    for valor in sorted(df["Condicion_Experimental"].unique()):
+        grupo = df[df["Condicion_Experimental"] == valor]["Puntaje_Postest"].values
+        if len(grupo) > 0:
+            grupos.append(grupo)
+            nombres_grupos.append(valor)
+    if len(grupos) < 2:
+        return {
+            "Estadístico": np.nan,
+            "Valor crítico": np.nan,
+            "Valor p": np.nan,
+            "Resultado": "No hay suficientes grupos"
+        }
+    # Prueba de Kruskal-Wallis
+    estadistico, p = kruskal(*grupos)
+    gl = len(grupos) - 1
+    valor_critico = chi2.ppf(0.95, df=gl)
+    resultado = "Rechaza H0" if p < 0.05 else "No rechaza H0"
+    return {
+        "Estadístico": estadistico,
+        "Valor crítico": valor_critico,
+        "Valor p": p,
+        "Resultado": resultado
+    }
 
+# Procesar cada hoja y guardar resultados
 resultados = []
+for hoja in hojas:
+    df = pd.read_excel(archivo, sheet_name=hoja)
+    df = limpiar_puntaje(df)
+    res = prueba_kruskal(df)
+    res["Muestra"] = hoja
+    resultados.append(res)
 
-for nivel in niveles:
-    # Filtrar postest por nivel
-    control = df_control[df_control['NivelLectura-Pretest'] == nivel]['Puntaje_Postest'].dropna()
-    experimental = df_experimental[df_experimental['NivelLectura-Pretest'] == nivel]['Puntaje_Postest'].dropna()
-    n_control = len(control)
-    n_experimental = len(experimental)
-    if n_control > 0 and n_experimental > 0:
-        stat, p = kruskal(control, experimental)
-        if stat >= valor_critico and p < 0.05:
-            conclusion = "Rechazamos H0: diferencia significativa entre grupos."
-        else:
-            conclusion = "No se rechaza H0: no hay diferencia significativa entre grupos."
-        resultados.append({
-            "Nivel de Lectura": nivel,
-            "N Control": n_control,
-            "N Experimental": n_experimental,
-            "Estadístico H": stat,
-            "Valor crítico (tabla)": valor_critico,
-            "Valor p": p,
-            "Resultado": conclusion
-        })
+# Crear DataFrame de resultados y exportar
+df_resultados = pd.DataFrame(resultados)[["Muestra", "Estadístico", "Valor crítico", "Valor p", "Resultado"]]
+df_resultados.to_excel("Reporte_KruskalWallis.xlsx", index=False)
 
-# Crear DataFrame y exportar a Excel
-df_resultados = pd.DataFrame(resultados)
-df_resultados.to_excel("Reporte_KruskalWallis_Resultados.xlsx", index=False)
-print(df_resultados)
+print("Reporte generado: Reporte_KruskalWallis.xlsx")
